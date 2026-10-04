@@ -1,158 +1,133 @@
 """
-ASCII Video Converter — Core Engine
+ASCII Video Converter — High-Fidelity Core Engine
 
-Handles frame-to-ASCII conversion with multiple character density ramps,
-optional color support, and edge-detection mode.
+Produces dense, full-coverage ASCII art with 24-bit true color ANSI output.
+Every pixel position is filled with a character. No settings to fiddle with —
+always maximum detail.
 """
 
 import cv2
 import numpy as np
-from dataclasses import dataclass, field
-from enum import Enum
-from typing import Optional
+import shutil
+from typing import Tuple
 
 
-class CharRamp(Enum):
-    """Character density ramps from sparse to dense."""
-    MINIMAL = " .:-=+*#%@"
-    STANDARD = " .'`^\",:;Il!i><~+_-?][}{1)(|\\/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$"
-    BLOCKS = " ░▒▓█"
-    DENSE = " .,:;i1tfLCG08@"
+# Dense character ramp — 70 characters from darkest to brightest.
+# Every brightness level maps to a unique, visually distinct character.
+CHAR_RAMP = (
+    " `.-':_,^=;><+!rc*/z?sLTv)J7(|Fi{C}fI31tlu[neoZ5Yxjya]"
+    "2ESwqkP6h9d4VpOGbUAKXHm8RD#$Bg0MNWQ%&@"
+)
+
+# NumPy lookup array for vectorized brightness→character mapping
+_RAMP_ARRAY = np.array(list(CHAR_RAMP))
+_RAMP_LEN = len(CHAR_RAMP)
+
+# Aspect ratio correction — terminal chars are ~2.2x taller than wide
+ASPECT_CORRECTION = 0.45
 
 
-@dataclass
-class ConversionConfig:
-    """Configuration for ASCII frame conversion."""
-    width: int = 120                          # Output character width
-    char_ramp: CharRamp = CharRamp.STANDARD   # Character density ramp
-    invert: bool = False                      # Invert brightness mapping
-    color_enabled: bool = False               # Enable ANSI color output
-    edge_mode: bool = False                   # Use edge-detection filter
-    contrast: float = 1.0                     # Contrast multiplier (0.5–2.0)
-    brightness: float = 0.0                   # Brightness offset (-50 to 50)
+def get_terminal_size() -> Tuple[int, int]:
+    """Return (columns, rows) of the current terminal."""
+    try:
+        cols, rows = shutil.get_terminal_size()
+        return cols, rows
+    except Exception:
+        return 120, 40
 
 
-class ASCIIConverter:
+def frame_to_ascii_color(frame: np.ndarray, width: int = 0) -> str:
     """
-    Converts image frames (NumPy arrays from OpenCV) into ASCII character grids.
+    Convert a BGR frame to a dense, 24-bit true-color ASCII string.
 
-    Supports grayscale mapping, ANSI 256-color output, edge-detection mode,
-    and adjustable contrast/brightness.
+    This is the highest quality mode — every character position is filled,
+    and each character is colored to match the original pixel using
+    \\033[38;2;R;G;Bm true-color ANSI escapes.
+
+    Parameters
+    ----------
+    frame : np.ndarray
+        BGR image from OpenCV (H×W×3).
+    width : int
+        Target character width. 0 = auto-fit to terminal.
+
+    Returns
+    -------
+    str
+        A single string with ANSI color codes, ready to write to stdout.
     """
+    if frame is None or frame.size == 0:
+        return ""
 
-    # Correction factor: terminal characters are ~2x taller than wide
-    ASPECT_RATIO_CORRECTION = 0.45
+    # Auto-fit to terminal width
+    if width <= 0:
+        cols, rows = get_terminal_size()
+        width = cols - 1  # Leave 1 col margin to prevent wrapping
 
-    def __init__(self, config: Optional[ConversionConfig] = None):
-        self.config = config or ConversionConfig()
-        self._ramp = self.config.char_ramp.value
-        if self.config.invert:
-            self._ramp = self._ramp[::-1]
-        self._ramp_len = len(self._ramp)
-
-    def update_config(self, config: ConversionConfig):
-        """Hot-swap configuration (e.g. when user changes settings at runtime)."""
-        self.config = config
-        self._ramp = config.char_ramp.value
-        if config.invert:
-            self._ramp = self._ramp[::-1]
-        self._ramp_len = len(self._ramp)
-
-    def frame_to_ascii(self, frame: np.ndarray) -> str:
-        """
-        Convert a single BGR frame to an ASCII string.
-
-        Parameters
-        ----------
-        frame : np.ndarray
-            BGR image from OpenCV (H×W×3).
-
-        Returns
-        -------
-        str
-            Multi-line ASCII art string ready to print.
-        """
-        if frame is None or frame.size == 0:
-            return ""
-
-        # Resize to target width, maintaining corrected aspect ratio
-        h, w = frame.shape[:2]
-        new_width = self.config.width
-        new_height = int((h / w) * new_width * self.ASPECT_RATIO_CORRECTION)
-        new_height = max(1, new_height)
-
-        resized = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_AREA)
-
-        # Apply contrast & brightness adjustments
-        if self.config.contrast != 1.0 or self.config.brightness != 0.0:
-            resized = cv2.convertScaleAbs(
-                resized,
-                alpha=self.config.contrast,
-                beta=self.config.brightness,
-            )
-
-        # Convert to grayscale for character mapping
-        gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
-
-        # Optional edge-detection mode
-        if self.config.edge_mode:
-            gray = cv2.Canny(gray, 100, 200)
-            # Canny gives 0/255; invert so edges are bright
-            gray = 255 - gray
-
-        if self.config.color_enabled:
-            return self._build_color_frame(resized, gray)
-        else:
-            return self._build_mono_frame(gray)
-
-    # ── Private helpers ──────────────────────────────────────────────
-
-    def _pixel_to_char(self, brightness: int) -> str:
-        """Map a 0-255 brightness value to an ASCII character."""
-        index = int(brightness / 256 * self._ramp_len)
-        index = min(index, self._ramp_len - 1)
-        return self._ramp[index]
-
-    def _build_mono_frame(self, gray: np.ndarray) -> str:
-        """Build a plain monochrome ASCII frame (fast path)."""
-        lines = []
-        ramp = self._ramp
-        ramp_len = self._ramp_len
-        for row in gray:
-            chars = []
-            for pixel in row:
-                idx = int(pixel / 256 * ramp_len)
-                idx = min(idx, ramp_len - 1)
-                chars.append(ramp[idx])
-            lines.append("".join(chars))
-        return "\n".join(lines)
-
-    def _build_color_frame(self, bgr: np.ndarray, gray: np.ndarray) -> str:
-        """Build an ANSI-256 color ASCII frame."""
-        lines = []
-        ramp = self._ramp
-        ramp_len = self._ramp_len
-
-        for y in range(gray.shape[0]):
-            row_chars = []
-            for x in range(gray.shape[1]):
-                # Character from brightness
-                idx = int(gray[y, x] / 256 * ramp_len)
-                idx = min(idx, ramp_len - 1)
-                char = ramp[idx]
-
-                # ANSI 256-color from BGR pixel
-                b, g, r = int(bgr[y, x, 0]), int(bgr[y, x, 1]), int(bgr[y, x, 2])
-                ansi_code = 16 + (36 * (r * 5 // 255)) + (6 * (g * 5 // 255)) + (b * 5 // 255)
-                row_chars.append(f"\033[38;5;{ansi_code}m{char}")
-
-            lines.append("".join(row_chars) + "\033[0m")
-        return "\n".join(lines)
-
-
-def get_frame_ascii_lines_count(frame: np.ndarray, width: int) -> int:
-    """Predict how many terminal lines a converted frame will occupy."""
-    if frame is None:
-        return 0
     h, w = frame.shape[:2]
-    return max(1, int((h / w) * width * ASCIIConverter.ASPECT_RATIO_CORRECTION))
+    new_height = max(1, int((h / w) * width * ASPECT_CORRECTION))
+
+    # Resize frame — INTER_AREA is best for downscaling
+    resized = cv2.resize(frame, (width, new_height), interpolation=cv2.INTER_AREA)
+
+    # Convert to grayscale for character selection
+    gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+
+    # Vectorized brightness → character index mapping
+    indices = (gray.astype(np.float32) / 255.0 * (_RAMP_LEN - 1)).astype(np.int32)
+    np.clip(indices, 0, _RAMP_LEN - 1, out=indices)
+    char_grid = _RAMP_ARRAY[indices]  # shape: (new_height, width)
+
+    # Convert BGR → RGB for ANSI color codes
+    rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+
+    # Build the frame string with true-color ANSI escapes
+    lines = []
+    for y in range(new_height):
+        row_parts = []
+        prev_r, prev_g, prev_b = -1, -1, -1
+        for x in range(width):
+            r, g, b = int(rgb[y, x, 0]), int(rgb[y, x, 1]), int(rgb[y, x, 2])
+            ch = char_grid[y, x]
+            # Only emit a new color escape if the color actually changed
+            if r != prev_r or g != prev_g or b != prev_b:
+                row_parts.append(f"\033[38;2;{r};{g};{b}m{ch}")
+                prev_r, prev_g, prev_b = r, g, b
+            else:
+                row_parts.append(ch)
+        lines.append("".join(row_parts))
+
+    return "\033[0m\n".join(lines) + "\033[0m"
+
+
+def frame_to_ascii_mono(frame: np.ndarray, width: int = 0) -> str:
+    """
+    Convert a BGR frame to a dense monochrome ASCII string.
+    Fallback mode if color is not desired.
+    """
+    if frame is None or frame.size == 0:
+        return ""
+
+    if width <= 0:
+        cols, _ = get_terminal_size()
+        width = cols - 1
+
+    h, w = frame.shape[:2]
+    new_height = max(1, int((h / w) * width * ASPECT_CORRECTION))
+
+    resized = cv2.resize(frame, (width, new_height), interpolation=cv2.INTER_AREA)
+    gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+
+    indices = (gray.astype(np.float32) / 255.0 * (_RAMP_LEN - 1)).astype(np.int32)
+    np.clip(indices, 0, _RAMP_LEN - 1, out=indices)
+    char_grid = _RAMP_ARRAY[indices]
+
+    lines = []
+    for y in range(new_height):
+        lines.append("".join(char_grid[y]))
+    return "\n".join(lines)
+
+
+def estimate_ascii_height(frame_h: int, frame_w: int, ascii_width: int) -> int:
+    """Predict how many terminal rows a frame will occupy."""
+    return max(1, int((frame_h / frame_w) * ascii_width * ASPECT_CORRECTION))
