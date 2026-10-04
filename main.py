@@ -1,314 +1,233 @@
 """
-ASCII Video Converter — Main CLI Entry Point
+ASCII Video Converter — Main Entry Point
 
-A feature-rich command-line tool that converts videos and live webcam
-feeds into real-time ASCII art in your terminal.
+No questions, no settings, no hassle.
+Option 1 → Opens file explorer to pick a video → plays it as dense colored ASCII.
+Option 2 → Starts live webcam as dense colored ASCII.
+
+You can also drag-and-drop a video file onto the terminal input.
 
 Usage:
-    python main.py video <path>       Play a video file as ASCII art
-    python main.py webcam             Stream live webcam as ASCII art
-    python main.py                    Launch interactive menu
-
-Options are configurable via flags (see --help).
+    python main.py                    Interactive menu
+    python main.py video <path>       Play a video directly
+    python main.py webcam             Start live webcam
 """
 
-import argparse
 import sys
 import os
 import time
+import threading
 
-# Enable ANSI escape codes on Windows
+# ── Windows terminal setup ───────────────────────────────────────────
 if sys.platform == "win32":
+    # Enable VT100 / ANSI escape sequences on Windows 10+
     try:
-        import colorama
-        colorama.init()
-    except ImportError:
-        # Fallback: enable VT100 processing via Windows API
         import ctypes
         kernel32 = ctypes.windll.kernel32
-        kernel32.SetConsoleMode(kernel32.GetStdHandle(-11), 7)
+        # STD_OUTPUT_HANDLE = -11
+        handle = kernel32.GetStdHandle(-11)
+        # ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
+        mode = ctypes.c_ulong()
+        kernel32.GetConsoleMode(handle, ctypes.byref(mode))
+        kernel32.SetConsoleMode(handle, mode.value | 0x0004)
+    except Exception:
+        pass
+    try:
+        import colorama
+        colorama.init(strip=False)
+    except ImportError:
+        pass
 
-from ascii_converter import ConversionConfig, CharRamp
 from video_player import VideoPlayer
 from webcam_ascii import WebcamASCII
 
 
 # ── Banner ───────────────────────────────────────────────────────────
 
-BANNER = r"""
-[96m
+BANNER = """
+\033[38;2;0;255;255m
      █████╗ ███████╗ ██████╗██╗██╗    ██╗   ██╗██╗██████╗ ███████╗ ██████╗ 
     ██╔══██╗██╔════╝██╔════╝██║██║    ██║   ██║██║██╔══██╗██╔════╝██╔═══██╗
     ███████║███████╗██║     ██║██║    ██║   ██║██║██║  ██║█████╗  ██║   ██║
     ██╔══██║╚════██║██║     ██║██║    ╚██╗ ██╔╝██║██║  ██║██╔══╝  ██║   ██║
     ██║  ██║███████║╚██████╗██║██║     ╚████╔╝ ██║██████╔╝███████╗╚██████╔╝
     ╚═╝  ╚═╝╚══════╝ ╚═════╝╚═╝╚═╝      ╚═══╝  ╚═╝╚═════╝ ╚══════╝ ╚═════╝ 
-[0m
-[93m    ╔══════════════════════════════════════════════════════════════╗
-    ║  Video → ASCII Art Converter   |   Terminal Art Engine v1.0 ║
-    ╚══════════════════════════════════════════════════════════════╝[0m
+\033[0m
+\033[38;2;255;200;50m    ╔══════════════════════════════════════════════════════════════════╗
+    ║   Terminal ASCII Art Engine v2.0  ·  True Color  ·  Dense Mode   ║
+    ╚══════════════════════════════════════════════════════════════════╝\033[0m
 """
 
 
 def print_banner():
-    """Display the application banner."""
     print(BANNER)
+
+
+# ── File picker (opens native Windows/OS file dialog) ────────────────
+
+def open_file_picker() -> str:
+    """
+    Open the native OS file explorer dialog to pick a video file.
+    Returns the selected file path, or empty string if cancelled.
+    Uses tkinter which is bundled with Python — no extra install needed.
+    """
+    try:
+        # Import tkinter — hide the root window
+        import tkinter as tk
+        from tkinter import filedialog
+
+        root = tk.Tk()
+        root.withdraw()          # Hide the main tkinter window
+        root.attributes('-topmost', True)  # Bring dialog to front
+
+        file_path = filedialog.askopenfilename(
+            title="Select a Video File",
+            filetypes=[
+                ("Video Files", "*.mp4 *.avi *.mkv *.mov *.wmv *.flv *.webm *.m4v *.mpg *.mpeg *.3gp"),
+                ("MP4 Files", "*.mp4"),
+                ("AVI Files", "*.avi"),
+                ("MKV Files", "*.mkv"),
+                ("MOV Files", "*.mov"),
+                ("All Files", "*.*"),
+            ],
+        )
+
+        root.destroy()
+        return file_path if file_path else ""
+
+    except Exception as e:
+        print(f"\033[91m  ✖ Could not open file picker: {e}\033[0m")
+        print("\033[90m    Falling back to manual path entry...\033[0m")
+        return ""
+
+
+def clean_path(raw_path: str) -> str:
+    """
+    Clean a file path from user input or drag-and-drop.
+    Handles surrounding quotes, trailing whitespace, and escaped spaces.
+    """
+    path = raw_path.strip()
+    # Remove surrounding quotes (drag-and-drop on Windows wraps paths in quotes)
+    if (path.startswith('"') and path.endswith('"')) or \
+       (path.startswith("'") and path.endswith("'")):
+        path = path[1:-1]
+    path = path.strip()
+    return path
+
+
+# ── Play a video file ────────────────────────────────────────────────
+
+def play_video(path: str):
+    """Play a video file as dense colored ASCII art. No questions asked."""
+    if not os.path.isfile(path):
+        print(f"\033[91m  ✖ File not found: {path}\033[0m\n")
+        return
+
+    player = VideoPlayer(path)
+    info = player.get_info()
+
+    duration = info["duration_sec"]
+    dur_str = f"{int(duration // 60):02d}:{int(duration % 60):02d}"
+
+    print(f"\n\033[97;1m  🎬 {info['filename']}\033[0m")
+    print(f"\033[90m     {info['width']}×{info['height']}  ·  {info['fps']:.1f} FPS  ·  {info['frame_count']} frames  ·  {dur_str}\033[0m")
+    print(f"\033[38;2;255;200;50m\n  Starting in 2 seconds... (maximize your terminal for best quality)\033[0m")
+    time.sleep(2)
+
+    player.play()
 
 
 # ── Interactive menu ─────────────────────────────────────────────────
 
 def interactive_menu():
-    """Launch the interactive menu when no CLI arguments are given."""
+    """Main interactive menu. Simple, no unnecessary questions."""
     print_banner()
 
     while True:
-        print("\033[96m┌─────────────────────────────────────────┐\033[0m")
-        print("\033[96m│\033[0m  \033[93m1.\033[0m 🎬  Play a video file as ASCII      \033[96m│\033[0m")
-        print("\033[96m│\033[0m  \033[93m2.\033[0m 📷  Live webcam ASCII stream        \033[96m│\033[0m")
-        print("\033[96m│\033[0m  \033[93m3.\033[0m ⚙️   Settings & help                 \033[96m│\033[0m")
-        print("\033[96m│\033[0m  \033[93m4.\033[0m 🚪  Exit                             \033[96m│\033[0m")
-        print("\033[96m└─────────────────────────────────────────┘\033[0m")
+        print()
+        print("\033[38;2;0;255;255m  ┌──────────────────────────────────────────────────────────────┐\033[0m")
+        print("\033[38;2;0;255;255m  │\033[0m                                                              \033[38;2;0;255;255m│\033[0m")
+        print("\033[38;2;0;255;255m  │\033[0m   \033[97;1m1.\033[0m  🎬  \033[97mPlay a video file\033[0m  \033[90m(opens file explorer)\033[0m           \033[38;2;0;255;255m│\033[0m")
+        print("\033[38;2;0;255;255m  │\033[0m   \033[97;1m2.\033[0m  📷  \033[97mLive webcam\033[0m  \033[90m(real-time ASCII from camera)\033[0m       \033[38;2;0;255;255m│\033[0m")
+        print("\033[38;2;0;255;255m  │\033[0m   \033[97;1m3.\033[0m  🚪  \033[97mExit\033[0m                                             \033[38;2;0;255;255m│\033[0m")
+        print("\033[38;2;0;255;255m  │\033[0m                                                              \033[38;2;0;255;255m│\033[0m")
+        print("\033[38;2;0;255;255m  │\033[0m  \033[90m  Or drag & drop a video file here and press Enter\033[0m          \033[38;2;0;255;255m│\033[0m")
+        print("\033[38;2;0;255;255m  │\033[0m                                                              \033[38;2;0;255;255m│\033[0m")
+        print("\033[38;2;0;255;255m  └──────────────────────────────────────────────────────────────┘\033[0m")
         print()
 
-        choice = input("\033[92m  ➤ Select an option (1-4): \033[0m").strip()
+        choice = input("\033[38;2;0;255;170m  ➤ \033[0m").strip()
 
         if choice == "1":
-            video_menu()
+            # Open native file picker
+            print("\033[90m  Opening file explorer...\033[0m")
+            path = open_file_picker()
+            if path:
+                play_video(path)
+            else:
+                print("\033[93m  No file selected.\033[0m")
+
         elif choice == "2":
-            webcam_menu()
+            # Start webcam — no questions, just go
+            print(f"\033[38;2;255;200;50m\n  Starting webcam in 2 seconds... (maximize your terminal)\033[0m")
+            time.sleep(2)
+            webcam = WebcamASCII()
+            webcam.start()
+
         elif choice == "3":
-            settings_help()
-        elif choice == "4":
-            print("\n\033[96m  👋 Goodbye!\033[0m\n")
+            print("\n\033[38;2;0;255;255m  👋 Goodbye!\033[0m\n")
             sys.exit(0)
+
         else:
-            print("\033[91m  ✖ Invalid choice. Please try again.\033[0m\n")
+            # Check if the user dragged and dropped a file path
+            cleaned = clean_path(choice)
+            if os.path.isfile(cleaned):
+                play_video(cleaned)
+            else:
+                print("\033[91m  ✖ Invalid option or file not found. Try again.\033[0m")
 
 
-def video_menu():
-    """Prompt user for video file and settings, then play."""
-    print("\n\033[96m  ── 🎬 Video File Mode ──\033[0m\n")
+# ── CLI mode ─────────────────────────────────────────────────────────
 
-    path = input("\033[92m  ➤ Enter video file path: \033[0m").strip()
-    # Remove surrounding quotes if user pasted a path with quotes
-    path = path.strip('"').strip("'")
-
-    if not os.path.isfile(path):
-        print(f"\033[91m  ✖ File not found: {path}\033[0m\n")
-        return
-
-    config = prompt_settings()
-    player = VideoPlayer(path, config)
-
-    # Show video info
-    info = player.get_info()
-    print(f"\n\033[90m  📄 {os.path.basename(path)}")
-    print(f"     Resolution: {info['width']}×{info['height']}")
-    print(f"     Duration:   {info['duration_sec']}s ({info['frame_count']} frames @ {info['fps']:.1f} FPS)\033[0m")
-    print(f"\n\033[93m  Starting playback in 2 seconds...\033[0m")
-    time.sleep(2)
-
-    player.play()
-    print()
-
-
-def webcam_menu():
-    """Prompt user for webcam settings, then start live feed."""
-    print("\n\033[96m  ── 📷 Live Webcam Mode ──\033[0m\n")
-
-    cam_input = input("\033[92m  ➤ Camera index (default 0): \033[0m").strip()
-    cam_index = int(cam_input) if cam_input.isdigit() else 0
-
-    mirror_input = input("\033[92m  ➤ Mirror mode / selfie view? (y/n, default y): \033[0m").strip().lower()
-    mirror = mirror_input != "n"
-
-    config = prompt_settings()
-    webcam = WebcamASCII(cam_index, config)
-
-    print(f"\n\033[93m  Starting webcam in 2 seconds...\033[0m")
-    time.sleep(2)
-
-    webcam.start(mirror=mirror)
-    print()
-
-
-def prompt_settings() -> ConversionConfig:
-    """Ask the user for conversion settings interactively."""
-    print()
-    print("\033[90m  ── Quick Settings (press Enter for defaults) ──\033[0m")
-
-    # Character ramp
-    print("\033[90m  Character styles:\033[0m")
-    print("\033[90m    1. Standard (detailed, default)\033[0m")
-    print("\033[90m    2. Minimal (clean)\033[0m")
-    print("\033[90m    3. Block characters (░▒▓█)\033[0m")
-    print("\033[90m    4. Dense (compact)\033[0m")
-    ramp_input = input("\033[92m  ➤ Style (1-4): \033[0m").strip()
-    ramp_map = {"1": CharRamp.STANDARD, "2": CharRamp.MINIMAL, "3": CharRamp.BLOCKS, "4": CharRamp.DENSE}
-    char_ramp = ramp_map.get(ramp_input, CharRamp.STANDARD)
-
-    # Color
-    color_input = input("\033[92m  ➤ Enable color output? (y/n, default n): \033[0m").strip().lower()
-    color_enabled = color_input == "y"
-
-    # Invert
-    invert_input = input("\033[92m  ➤ Invert brightness? (y/n, default n): \033[0m").strip().lower()
-    invert = invert_input == "y"
-
-    # Edge mode
-    edge_input = input("\033[92m  ➤ Edge-detection mode? (y/n, default n): \033[0m").strip().lower()
-    edge_mode = edge_input == "y"
-
-    # Width
-    width_input = input("\033[92m  ➤ ASCII width in chars (default auto): \033[0m").strip()
-    width = int(width_input) if width_input.isdigit() else 120
-
-    return ConversionConfig(
-        width=width,
-        char_ramp=char_ramp,
-        invert=invert,
-        color_enabled=color_enabled,
-        edge_mode=edge_mode,
-    )
-
-
-def settings_help():
-    """Display help information about settings."""
-    print()
-    print("\033[96m  ── ⚙️  Settings & Help ──\033[0m")
-    print()
-    print("\033[93m  Character Styles:\033[0m")
-    print(f"\033[90m    Standard : {CharRamp.STANDARD.value}\033[0m")
-    print(f"\033[90m    Minimal  : {CharRamp.MINIMAL.value}\033[0m")
-    print(f"\033[90m    Blocks   : {CharRamp.BLOCKS.value}\033[0m")
-    print(f"\033[90m    Dense    : {CharRamp.DENSE.value}\033[0m")
-    print()
-    print("\033[93m  Features:\033[0m")
-    print("\033[90m    • Color mode     — Uses ANSI 256-color to tint ASCII chars\033[0m")
-    print("\033[90m    • Invert         — Swaps dark/light character mapping\033[0m")
-    print("\033[90m    • Edge detection — Shows only edges (Canny filter)\033[0m")
-    print("\033[90m    • Width          — Controls output resolution (more chars = more detail)\033[0m")
-    print()
-    print("\033[93m  CLI Usage:\033[0m")
-    print("\033[90m    python main.py video <path> [--width 120] [--style standard] [--color] [--invert] [--edges]\033[0m")
-    print("\033[90m    python main.py webcam [--camera 0] [--no-mirror] [--color] [--style blocks]\033[0m")
-    print()
-    input("\033[92m  Press Enter to go back... \033[0m")
-    print()
-
-
-# ── CLI argument parsing ─────────────────────────────────────────────
-
-def build_parser() -> argparse.ArgumentParser:
-    """Build the CLI argument parser."""
-    parser = argparse.ArgumentParser(
-        prog="ASCII Video",
-        description="Convert videos and webcam feeds into real-time ASCII art in your terminal.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python main.py                           Launch interactive menu
-  python main.py video myvideo.mp4         Play a video as ASCII art
-  python main.py video clip.mp4 --color    Play with color output
-  python main.py webcam                    Start live webcam ASCII
-  python main.py webcam --style blocks     Webcam with block characters
-        """,
-    )
-
-    subparsers = parser.add_subparsers(dest="mode", help="Operating mode")
-
-    # Video subcommand
-    video_parser = subparsers.add_parser("video", help="Play a video file as ASCII art")
-    video_parser.add_argument("path", type=str, help="Path to the video file")
-    video_parser.add_argument("--width", type=int, default=0, help="ASCII width in characters (0 = auto)")
-    video_parser.add_argument("--style", type=str, default="standard",
-                              choices=["standard", "minimal", "blocks", "dense"],
-                              help="Character style/ramp")
-    video_parser.add_argument("--color", action="store_true", help="Enable ANSI color output")
-    video_parser.add_argument("--invert", action="store_true", help="Invert brightness mapping")
-    video_parser.add_argument("--edges", action="store_true", help="Enable edge-detection mode")
-    video_parser.add_argument("--contrast", type=float, default=1.0, help="Contrast multiplier (0.5–2.0)")
-    video_parser.add_argument("--brightness", type=float, default=0.0, help="Brightness offset (-50 to 50)")
-
-    # Webcam subcommand
-    webcam_parser = subparsers.add_parser("webcam", help="Start live webcam ASCII feed")
-    webcam_parser.add_argument("--camera", type=int, default=0, help="Camera device index")
-    webcam_parser.add_argument("--width", type=int, default=0, help="ASCII width in characters (0 = auto)")
-    webcam_parser.add_argument("--style", type=str, default="standard",
-                               choices=["standard", "minimal", "blocks", "dense"],
-                               help="Character style/ramp")
-    webcam_parser.add_argument("--color", action="store_true", help="Enable ANSI color output")
-    webcam_parser.add_argument("--invert", action="store_true", help="Invert brightness mapping")
-    webcam_parser.add_argument("--edges", action="store_true", help="Enable edge-detection mode")
-    webcam_parser.add_argument("--no-mirror", action="store_true", help="Disable mirror/selfie mode")
-    webcam_parser.add_argument("--contrast", type=float, default=1.0, help="Contrast multiplier (0.5–2.0)")
-    webcam_parser.add_argument("--brightness", type=float, default=0.0, help="Brightness offset (-50 to 50)")
-
-    return parser
-
-
-def style_to_ramp(style: str) -> CharRamp:
-    """Convert CLI style string to CharRamp enum."""
-    mapping = {
-        "standard": CharRamp.STANDARD,
-        "minimal": CharRamp.MINIMAL,
-        "blocks": CharRamp.BLOCKS,
-        "dense": CharRamp.DENSE,
-    }
-    return mapping.get(style, CharRamp.STANDARD)
-
-
-# ── Main entry point ─────────────────────────────────────────────────
-
-def main():
-    # If no arguments given, launch interactive menu
-    if len(sys.argv) == 1:
+def cli_mode():
+    """Handle command-line arguments for direct usage."""
+    if len(sys.argv) < 2:
         interactive_menu()
         return
 
-    parser = build_parser()
-    args = parser.parse_args()
+    command = sys.argv[1].lower()
 
-    if args.mode == "video":
-        config = ConversionConfig(
-            width=args.width if args.width > 0 else 120,
-            char_ramp=style_to_ramp(args.style),
-            invert=args.invert,
-            color_enabled=args.color,
-            edge_mode=args.edges,
-            contrast=args.contrast,
-            brightness=args.brightness,
-        )
-        player = VideoPlayer(args.path, config)
-
-        # Show info
+    if command == "video":
+        if len(sys.argv) < 3:
+            print("\033[91m  ✖ Usage: python main.py video <path>\033[0m")
+            sys.exit(1)
+        path = clean_path(sys.argv[2])
         print_banner()
-        info = player.get_info()
-        print(f"\033[90m  📄 {os.path.basename(args.path)}")
-        print(f"     Resolution: {info['width']}×{info['height']}")
-        print(f"     Duration:   {info['duration_sec']}s ({info['frame_count']} frames @ {info['fps']:.1f} FPS)\033[0m")
-        print(f"\n\033[93m  Starting playback in 2 seconds...\033[0m")
+        play_video(path)
+
+    elif command == "webcam":
+        print_banner()
+        print(f"\033[38;2;255;200;50m\n  Starting webcam in 2 seconds...\033[0m")
         time.sleep(2)
-
-        player.play(auto_width=(args.width == 0))
-
-    elif args.mode == "webcam":
-        config = ConversionConfig(
-            width=args.width if args.width > 0 else 120,
-            char_ramp=style_to_ramp(args.style),
-            invert=args.invert,
-            color_enabled=args.color,
-            edge_mode=args.edges,
-            contrast=args.contrast,
-            brightness=args.brightness,
-        )
-        print_banner()
-        webcam = WebcamASCII(args.camera, config)
-        webcam.start(auto_width=(args.width == 0), mirror=not args.no_mirror)
+        webcam = WebcamASCII()
+        webcam.start()
 
     else:
-        parser.print_help()
+        # Maybe they passed a file path directly
+        path = clean_path(sys.argv[1])
+        if os.path.isfile(path):
+            print_banner()
+            play_video(path)
+        else:
+            print(f"\033[91m  ✖ Unknown command: {command}\033[0m")
+            print("\033[90m  Usage:\033[0m")
+            print("\033[90m    python main.py                  Interactive menu\033[0m")
+            print("\033[90m    python main.py video <path>     Play a video\033[0m")
+            print("\033[90m    python main.py webcam           Live webcam\033[0m")
+            sys.exit(1)
 
+
+# ── Entry point ──────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    main()
+    cli_mode()
