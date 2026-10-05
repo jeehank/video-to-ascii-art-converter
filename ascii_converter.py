@@ -138,7 +138,7 @@ def frame_to_ascii_color(frame: np.ndarray, width: int = 0, height: int = 0) -> 
     return "\033[0m\n".join(lines) + "\033[0m"
 
 
-def frame_to_ascii_mono(frame: np.ndarray, width: int = 0) -> str:
+def frame_to_ascii_mono(frame: np.ndarray, width: int = 0, height: int = 0) -> str:
     """
     Convert a BGR frame to a dense monochrome ASCII string.
     Fallback mode if color is not desired.
@@ -146,12 +146,21 @@ def frame_to_ascii_mono(frame: np.ndarray, width: int = 0) -> str:
     if frame is None or frame.size == 0:
         return ""
 
-    if width <= 0:
-        cols, _ = get_terminal_size()
-        width = cols - 1
+    cols, rows = get_terminal_size()
+    max_w = max(10, cols - 1)
+    max_h = max(5, rows - 1)
 
-    h, w = frame.shape[:2]
-    new_height = max(1, int((h / w) * width * ASPECT_CORRECTION))
+    if width <= 0 and height <= 0:
+        width = max_w
+        new_height = max_h
+    elif width <= 0:
+        width = max_w
+        new_height = height
+    elif height <= 0:
+        h, w = frame.shape[:2]
+        new_height = max(1, int((h / w) * width * ASPECT_CORRECTION))
+    else:
+        new_height = height
 
     resized = cv2.resize(frame, (width, new_height), interpolation=cv2.INTER_AREA)
     gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
