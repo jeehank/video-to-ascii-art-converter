@@ -36,7 +36,7 @@ def get_terminal_size() -> Tuple[int, int]:
         return 120, 40
 
 
-def frame_to_ascii_color(frame: np.ndarray, width: int = 0) -> str:
+def frame_to_ascii_color(frame: np.ndarray, width: int = 0, height: int = 0) -> str:
     """
     Convert a BGR frame to a dense, 24-bit true-color ASCII string.
 
@@ -49,7 +49,9 @@ def frame_to_ascii_color(frame: np.ndarray, width: int = 0) -> str:
     frame : np.ndarray
         BGR image from OpenCV (H×W×3).
     width : int
-        Target character width. 0 = auto-fit to terminal.
+        Target character width. 0 = auto-fit to terminal width.
+    height : int
+        Target character height. 0 = auto-fit to terminal height.
 
     Returns
     -------
@@ -59,19 +61,22 @@ def frame_to_ascii_color(frame: np.ndarray, width: int = 0) -> str:
     if frame is None or frame.size == 0:
         return ""
 
-    # Auto-fit to terminal dimensions (respecting both width and height to prevent scrolling)
-    if width <= 0:
-        cols, rows = get_terminal_size()
-        max_w = max(10, cols - 1)
-        max_h = max(5, rows - 1)
-        h, w = frame.shape[:2]
-        aspect = (h / w) * ASPECT_CORRECTION
-        # Find maximum dimensions that fit in both width and height
-        width = min(max_w, max(10, int(max_h / aspect)))
-        new_height = max(1, int(width * aspect))
-    else:
+    # Fit the entire screen in any shape or zoom (edge-to-edge, zero empty borders)
+    cols, rows = get_terminal_size()
+    max_w = max(10, cols - 1)
+    max_h = max(5, rows - 1)
+
+    if width <= 0 and height <= 0:
+        width = max_w
+        new_height = max_h
+    elif width <= 0:
+        width = max_w
+        new_height = height
+    elif height <= 0:
         h, w = frame.shape[:2]
         new_height = max(1, int((h / w) * width * ASPECT_CORRECTION))
+    else:
+        new_height = height
 
     # Resize frame — INTER_AREA is best for downscaling
     resized = cv2.resize(frame, (width, new_height), interpolation=cv2.INTER_AREA)
