@@ -9,7 +9,7 @@ import cv2
 import sys
 import time
 
-from ascii_converter import frame_to_ascii_color
+from ascii_converter import frame_to_ascii_color, get_terminal_size
 
 
 class WebcamASCII:
@@ -24,7 +24,7 @@ class WebcamASCII:
     def start(self):
         """
         Start the live ASCII webcam feed. Blocks until Ctrl+C.
-        Always uses full terminal width, dense characters, true color, and mirror mode.
+        Always uses full terminal width and height, dense characters, true color, and mirror mode.
         """
         cap = cv2.VideoCapture(self.camera_index)
         if not cap.isOpened():
@@ -45,6 +45,7 @@ class WebcamASCII:
 
         frame_count = 0
         out = sys.stdout
+        last_size = (0, 0)
 
         try:
             while True:
@@ -57,8 +58,14 @@ class WebcamASCII:
                 # Mirror mode (selfie view)
                 frame = cv2.flip(frame, 1)
 
-                # Dynamically fits terminal dimensions (smooth zooming & resizing)
-                ascii_art = frame_to_ascii_color(frame)
+                # Check if terminal was resized or zoomed
+                cols, rows = get_terminal_size()
+                if (cols, rows) != last_size:
+                    sys.stdout.write("\033[2J")  # Clear screen on resize/zoom to prevent ghost characters
+                    last_size = (cols, rows)
+
+                # Fits the entire screen in any shape or zoom (edge-to-edge)
+                ascii_art = frame_to_ascii_color(frame, width=cols - 1, height=rows - 1)
                 frame_count += 1
 
                 # Cursor home + frame in a single write call (zero flicker, no overhead)
