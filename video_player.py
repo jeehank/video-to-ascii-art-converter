@@ -9,9 +9,7 @@ import cv2
 import sys
 import time
 import os
-import shutil
-
-from ascii_converter import frame_to_ascii_color, get_terminal_size
+from ascii_converter import frame_to_ascii_color
 
 
 class VideoPlayer:
@@ -40,10 +38,6 @@ class VideoPlayer:
         frame_delay = 1.0 / fps
         filename = os.path.basename(self.video_path)
 
-        # Get terminal width
-        cols, _ = get_terminal_size()
-        ascii_width = cols - 1
-
         # Hide cursor and clear screen
         sys.stdout.write("\033[?25l")  # Hide cursor
         sys.stdout.write("\033[2J")    # Clear screen
@@ -58,12 +52,12 @@ class VideoPlayer:
                 if not ret:
                     break
 
-                ascii_art = frame_to_ascii_color(frame, ascii_width)
+                # Dynamically fits terminal dimensions (smooth zooming & resizing)
+                ascii_art = frame_to_ascii_color(frame)
                 frame_num += 1
 
-                # Move cursor to home position (no clearing = no flicker)
-                sys.stdout.write("\033[H")
-                sys.stdout.write(ascii_art)
+                # Move cursor to home position and render frame (atomic write, zero flicker)
+                sys.stdout.write("\033[H" + ascii_art)
                 sys.stdout.flush()
 
                 # Maintain correct frame rate

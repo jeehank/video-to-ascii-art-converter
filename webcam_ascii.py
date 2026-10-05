@@ -7,11 +7,9 @@ Flicker-free rendering via cursor repositioning.
 
 import cv2
 import sys
-import io
 import time
-import shutil
 
-from ascii_converter import frame_to_ascii_color, get_terminal_size
+from ascii_converter import frame_to_ascii_color
 
 
 class WebcamASCII:
@@ -40,16 +38,12 @@ class WebcamASCII:
         # Minimize camera buffer to reduce latency
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
-        cols, _ = get_terminal_size()
-        ascii_width = cols - 1
-
         # Hide cursor and clear screen
         sys.stdout.write("\033[?25l")
         sys.stdout.write("\033[2J")
         sys.stdout.flush()
 
         frame_count = 0
-        # Reusable buffer for output
         out = sys.stdout
 
         try:
@@ -63,14 +57,12 @@ class WebcamASCII:
                 # Mirror mode (selfie view)
                 frame = cv2.flip(frame, 1)
 
-                ascii_art = frame_to_ascii_color(frame, ascii_width)
+                # Dynamically fits terminal dimensions (smooth zooming & resizing)
+                ascii_art = frame_to_ascii_color(frame)
                 frame_count += 1
 
-                # Build entire frame in one write to reduce syscalls
-                buf = io.StringIO()
-                buf.write("\033[H")       # Cursor home (no clear = no flicker)
-                buf.write(ascii_art)
-                out.write(buf.getvalue())
+                # Cursor home + frame in a single write call (zero flicker, no overhead)
+                out.write("\033[H" + ascii_art)
                 out.flush()
 
                 # Target ~60 FPS
