@@ -9,7 +9,7 @@ import cv2
 import sys
 import time
 import os
-from ascii_converter import frame_to_ascii_color
+from ascii_converter import frame_to_ascii_color, get_terminal_size
 
 
 class VideoPlayer:
@@ -26,7 +26,7 @@ class VideoPlayer:
     def play(self):
         """
         Start playback. Blocks until the video ends or user presses Ctrl+C.
-        Always uses full terminal width, dense characters, and true color.
+        Always uses full terminal width and height, dense characters, and true color.
         """
         cap = cv2.VideoCapture(self.video_path)
         if not cap.isOpened():
@@ -44,6 +44,7 @@ class VideoPlayer:
         sys.stdout.flush()
 
         frame_num = 0
+        last_size = (0, 0)
         try:
             while True:
                 start_time = time.perf_counter()
@@ -52,8 +53,14 @@ class VideoPlayer:
                 if not ret:
                     break
 
-                # Dynamically fits terminal dimensions (smooth zooming & resizing)
-                ascii_art = frame_to_ascii_color(frame)
+                # Check if terminal was resized or zoomed
+                cols, rows = get_terminal_size()
+                if (cols, rows) != last_size:
+                    sys.stdout.write("\033[2J")  # Clear screen on resize/zoom to prevent ghost characters
+                    last_size = (cols, rows)
+
+                # Fits the entire screen in any shape or zoom (edge-to-edge)
+                ascii_art = frame_to_ascii_color(frame, width=cols - 1, height=rows - 1)
                 frame_num += 1
 
                 # Move cursor to home position and render frame (atomic write, zero flicker)
