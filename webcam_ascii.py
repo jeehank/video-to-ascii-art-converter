@@ -49,8 +49,6 @@ class WebcamASCII:
         sys.stdout.flush()
 
         frame_count = 0
-        fps_timer = time.perf_counter()
-        display_fps = 0.0
         # Reusable buffer for output
         out = sys.stdout
 
@@ -68,21 +66,9 @@ class WebcamASCII:
                 ascii_art = frame_to_ascii_color(frame, ascii_width)
                 frame_count += 1
 
-                # Calculate FPS every 15 frames
-                if frame_count % 15 == 0:
-                    now = time.perf_counter()
-                    display_fps = 15.0 / max(now - fps_timer, 0.001)
-                    fps_timer = now
-
-                # Minimal fixed-width status — no jitter
-                fps_str = f"{display_fps:4.0f}"
-                status = f"\033[97;1m LIVE \033[0m \033[92m{fps_str} fps\033[0m \033[90m│ Ctrl+C quit\033[0m"
-
                 # Build entire frame in one write to reduce syscalls
                 buf = io.StringIO()
                 buf.write("\033[H")       # Cursor home (no clear = no flicker)
-                buf.write(status)
-                buf.write("\033[K\n")     # Clear rest of status line
                 buf.write(ascii_art)
                 out.write(buf.getvalue())
                 out.flush()

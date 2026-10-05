@@ -61,28 +61,8 @@ class VideoPlayer:
                 ascii_art = frame_to_ascii_color(frame, ascii_width)
                 frame_num += 1
 
-                # Build status bar
-                progress = frame_num / total_frames * 100 if total_frames > 0 else 0
-                bar_len = 40
-                filled = int(bar_len * frame_num / total_frames) if total_frames > 0 else 0
-                bar = "█" * filled + "░" * (bar_len - filled)
-
-                elapsed_sec = frame_num / fps
-                total_sec = total_frames / fps if fps > 0 else 0
-                time_str = f"{int(elapsed_sec // 60):02d}:{int(elapsed_sec % 60):02d}"
-                total_str = f"{int(total_sec // 60):02d}:{int(total_sec % 60):02d}"
-
-                status = (
-                    f"\033[97;1m ▶ {filename}\033[0m  "
-                    f"\033[93m{bar}\033[0m  "
-                    f"\033[96m{time_str}/{total_str}\033[0m  "
-                    f"\033[92m{progress:5.1f}%\033[0m  "
-                    f"\033[90m[Ctrl+C to stop]\033[0m"
-                )
-
                 # Move cursor to home position (no clearing = no flicker)
                 sys.stdout.write("\033[H")
-                sys.stdout.write(status + "\n")
                 sys.stdout.write(ascii_art)
                 sys.stdout.flush()
 
